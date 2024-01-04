@@ -1,8 +1,9 @@
 import string
 from pathlib import Path
+import unidecode
 
 import spacy
-from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
@@ -27,9 +28,19 @@ class Preprocessor:
                  min_df=0.0, max_df=1.0, min_words=0, punctuation=string.punctuation,
                  min_chars=1, stopwords_list=None,
                  num_process=None, remove_spacy_stopwords=True, preprocessed=False,
-                 should_split = True
+                 vectorizer=None,
+                 should_split=True,
+                 use_spacy_tokenizer=True,
+                 token_dict=None,
+                 strip_accents=True
                  ):
+        self.strip_accents = strip_accents
+        self.token_dict = token_dict
+        self.use_spacy_tokenizer = use_spacy_tokenizer
+        self.vectorizer = vectorizer
         self.vectorizer = None
+        if self.vectorizer is None:
+            self.vectorizer = CountVectorizer
         self.min_chars = min_chars
         self.vocabulary = None
         self.lowercase = lowercase
@@ -45,14 +56,18 @@ class Preprocessor:
         self.language = language
         self.max_features = None
         self.num_processes = num_process
-        self.should_split = True
+        self.should_split = should_split
 
         self.preprocessed = preprocessed
+        self.tokenizer = None
 
-        if self.lemmatize:
+        if self.use_spacy_tokenizer or self.lemmatize:
+            if self.token_dict is None:
+                self.token_dict = {}
             lang = spacy_model_mapping[self.language]
             try:
                 self.spacy_model = spacy.load(lang)
+                self.tokenizer = self.spacy_model.tokenizer
             except IOError:
                 raise IOError("Can't find model " + lang + ". Check the data directory or download it using the "
                                                            "following command:\npython -m spacy download " + lang)
@@ -74,7 +89,17 @@ class Preprocessor:
                         stopwords = [line.strip() for line in fr.readlines()]
                         assert stopwords_list == language
         self.stopwords = stopwords
-        print(stopwords)
+        self.stopwords.extend([token for name, token in self.token_dict.items()])
+        # print(stopwords)
+        if self.max_features is not None:
+            self.vectorizer = CountVectorizer(lowercase=self.lowercase, max_features=self.max_features,
+                                              stop_words=self.stopwords,
+                                              # token_pattern=r"(?u)\b[\w|\-]{" + str(self.min_chars) + r",}\b"
+                                              )
+        else:
+            self.vectorizer = CountVectorizer(max_df=self.max_df, min_df=self.min_df, lowercase=self.lowercase,
+                                              # token_pattern=r"(?u)\b[\w|\-]{" + str(self.min_chars) + r",}\b",
+                                              stop_words=self.stopwords)
 
     def split(self, docs_docs, docs_labels=None, docs_idx=None):
         if docs_labels is None:
@@ -127,35 +152,94 @@ class Preprocessor:
             new_d = new_d.translate(str.maketrans(self.punctuation, ' ' * len(self.punctuation)))
         if self.remove_numbers:
             new_d = new_d.translate(str.maketrans("0123456789", ' ' * len("0123456789")))
+        if self.strip_accents:
+            new_d = unidecode.unidecode(new_d)
         new_d = " ".join(new_d.split())
         return new_d
 
     def filter(self, docs):
         print(f"Filtering {len(docs)}")
-        print(docs[0])
+        # print(docs[0])
         if self.vocabulary is not None:
             vectorizer = TfidfVectorizer(max_df=self.max_df, min_df=self.min_df, vocabulary=self.vocabulary,
                                          token_pattern=r"(?u)\b\w{" + str(self.min_chars) + ",}\b",
                                          lowercase=self.lowercase, stop_words=self.stopwords)
+            self.vectorizer = vectorizer
 
-        elif self.max_features is not None:
-            vectorizer = TfidfVectorizer(lowercase=self.lowercase, max_features=self.max_features,
-                                         stop_words=self.stopwords,
-                                         token_pattern=r"(?u)\b[\w|\-]{" + str(self.min_chars) + r",}\b")
-
-        else:
-            vectorizer = TfidfVectorizer(max_df=self.max_df, min_df=self.min_df, lowercase=self.lowercase,
-                                         token_pattern=r"(?u)\b[\w|\-]{" + str(self.min_chars) + r",}\b",
-                                         stop_words=self.stopwords)
-
-        self.vectorizer = vectorizer
-
-        vectorizer.fit_transform(docs)
-        vocabulary = vectorizer.get_feature_names_out()
+        self.vectorizer.fit_transform(docs)
+        vocabulary = self.vectorizer.get_feature_names_out()
         return vocabulary
 
-    def preprocess(self, docs_path, labels_path=None, num_processes=None, dataset=None, split = False):
-        self.should_split = split
+    def tokenize_step(self, doc):
+        new_doc = []
+        if self.token_dict is None:
+            raise TypeError("token dic should nebe NoneType if tokenizing")
+
+        if 'doc_start_token' in self.token_dict:
+            new_doc.append(self.token_dict['doc_start_token'])
+        for token in doc:
+            if token.is_space or len(token.text) > 15:
+                continue
+            if token.is_alpha:
+                new_doc.append(token.text)
+            elif 'number_token' in self.token_dict and token.is_digit:
+                new_doc.append(self.token_dict['number_token'])
+            elif 'email_token' in self.token_dict and token.like_email:
+                new_doc.append(self.token_dict['email_token'])
+            elif 'url_token' in self.token_dict and token.like_url:
+                new_doc.append(self.token_dict['url_token'])
+            elif 'alpha_num_token' in self.token_dict and token.text.isalnum():
+                new_doc.append(self.token_dict['alpha_num_token'])
+            elif 'unk_token' in self.token_dict and token.is_oov:
+                new_doc.append(self.token_dict['unk_token'])
+            else:
+                new_doc.append(token.text)
+        if 'doc_end_token' in self.token_dict:
+            new_doc.append(self.token_dict['doc_end_token'])
+
+        new_doc = " ".join(new_doc)
+        return new_doc
+
+    def tokenize(self, docs):
+        single_run = False
+        if not isinstance(docs, spacy.tokens.doc.Doc):
+            if isinstance(docs, str):
+                docs = self.tokenizer.pipe([docs])
+                single_run = True
+        if single_run:
+            return self.tokenize_step(next(docs))
+        docs_list = None
+        if self.num_processes is not None:
+            chunksize = max(1, len(docs) // (self.num_processes * 20))
+            if self.use_spacy_tokenizer:
+                normalized_docs = process_map(self.normalize_doc, list(self.tokenizer.pipe(docs)), chunksize=chunksize,
+                                              max_workers=self.num_processes)
+                docs_list = process_map(self.tokenize_step, list(self.tokenizer.pipe(normalized_docs)),
+                                        chunksize=chunksize,
+                                        max_workers=self.num_processes)
+            else:
+                docs_list = process_map(self.simple_steps, docs, chunksize=chunksize, max_workers=self.num_processes)
+        else:
+            if self.use_spacy_tokenizer:
+                normalized_docs = list(map(self.normalize_doc, tqdm(docs)))
+                docs_list = list(map(self.tokenize_step, tqdm(list(self.tokenizer.pipe(normalized_docs)))))
+            else:
+                docs_list = list(map(self.simple_steps, tqdm(docs)))
+        docs = docs_list
+        return docs
+
+    def normalize_doc(self, doc):
+        new_doc = doc
+        if self.lowercase:
+            new_doc = new_doc.lower()
+        if self.strip_accents:
+            new_doc = unidecode.unidecode(new_doc)
+        new_doc = new_doc.replace('\t', ' ')
+        new_doc = new_doc.replace('\n', ' ')
+        return new_doc
+
+    def preprocess(self, docs_path, labels_path=None, num_processes=None, dataset=None):
+        # self.should_split = split
         docs, labels = [], []
         doc_map_list = None
         docs_idx, docs_labels, docs_docs = [], [], []
@@ -171,13 +255,7 @@ class Preprocessor:
             else:
                 with open(docs_path, 'r') as infile:
                     docs = [line.strip() for line in infile.readlines()]
-        if num_processes is not None:
-            chunksize = max(1, len(docs) // (num_processes * 20))
-            docs_list = process_map(self.simple_steps, docs, chunksize=chunksize, max_workers=num_processes)
-            docs = docs_list
-        else:
-            docs = list(map(self.simple_steps, tqdm(docs)))
-
+        docs = self.tokenize(docs)
         vocabulary = self.filter(docs)
         print(f"vocab created {len(vocabulary)}")
         if dataset is None and labels_path is not None:
@@ -187,23 +265,27 @@ class Preprocessor:
             labels = None
         vocab = set(vocabulary)
         docs_docs, docs_labels, docs_idx = self.filter_docs_with_vocab(vocab, docs=docs, labels=labels)
-        print("Filtering done")
-        metadata = {"total_documents": len(docs), "vocabulary_length": len(vocabulary)}
+        metadata = {"total_documents": len(docs), "vocabulary_length": len(vocab)}
         part_labels = None
         if self.should_split:
             part_corpus, part_labels, doc_indexes, part_metadata = self.split(docs_docs, docs_labels, docs_idx)
             metadata['validation_idx'] = part_metadata['validation_idx']
             metadata['test_idx'] = part_metadata['test_idx']
-            return Dataset(docs=part_corpus, vocabulary=vocabulary, metadata=metadata, labels=part_labels,
+            return Dataset(docs=part_corpus, vocabulary=vocab, metadata=metadata, labels=part_labels,
                            indices=doc_indexes)
         else:
-            return Dataset(docs=docs_docs, vocabulary=vocabulary, metadata=metadata, labels=docs_labels,
+            return Dataset(docs=docs_docs, vocabulary=vocab, metadata=metadata, labels=docs_labels,
                            indices=docs_idx)
+
+    def filter_single_doc(self, doc):
+        pass
 
     def filter_docs_with_vocab(self, vocab, docs=None, labels=None):
         if docs is None:
             raise CorpusNotFoundError("Documents not given")
         docs_docs, docs_labels, docs_idx = [], [], []
+        if vocab is None:
+            vocab = self.vectorizer.get_feature_names_out()
         if labels is not None:
             for i, doc, label in zip(range(len(docs)), docs, labels):
                 new_doc = [w for w in doc.split() if w in vocab]

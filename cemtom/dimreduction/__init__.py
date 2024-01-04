@@ -1,2 +1,6 @@
-from ._base import *
+from ._base import PCA
+
+__all__ = [
+    "PCA"
+]
 

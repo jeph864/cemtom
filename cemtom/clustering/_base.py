@@ -1,4 +1,5 @@
 import hdbscan
+import numpy as np
 from sklearn.cluster import AgglomerativeClustering as skAgglomerativeClustering
 from sklearn.mixture import GaussianMixture
 from sklearn.cluster import OPTICS
@@ -51,15 +52,25 @@ class DBSCANClustering(ClusteringBase):
 
 
 class KMeansClustering(ClusteringBase):
-    def __init__(self, n_clusters=8, **kwargs):
-        super().__init__(n_clusters=n_clusters, **kwargs)
-        self.model = KMeans(**self.params)
+    def __init__(self, n_clusters=8, random_state=42):
+        super().__init__(n_clusters=n_clusters, random_state=random_state)
+        self.model = KMeans(n_clusters=n_clusters, random_state=random_state)
+        self.n_clusters = n_clusters
+        self.random_state = random_state
+        self.model = KMeans(n_clusters=self.n_clusters, random_state=self.random_state)
+        self.m_clusters = None
 
-    def fit(self, data):
-        self.model.fit(data)
+    def fit(self, data, sample_weight=None):
+        return self.model.fit(data, sample_weight=sample_weight)
 
-    def predict(self, data):
-        return self.model.predict(data)
+    def transform(self, data, sample_weight=None):
+        return self.model.predict(data, sample_weight=sample_weight)
+
+    def fit_transform(self, data, sample_weight=None):
+        self.fit(data, sample_weight=sample_weight)
+        self.m_clusters = self.transform(data, sample_weight)
+        centers = np.array(self.model.cluster_centers_)
+        return self.m_clusters, centers
 
 
 class GaussianMixtureClustering(ClusteringBase):

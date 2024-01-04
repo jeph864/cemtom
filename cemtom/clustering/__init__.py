@@ -1,5 +1,5 @@
-from ._base import ClusteringBase, HDBSCAN
+from ._base import ClusteringBase, KMeansClustering, HDBSCANClustering
 
 __all__ = [
-    "ClusteringBase", "HDBSCAN"
+    "ClusteringBase", "KMeansClustering", "HDBSCANClustering"
 ]

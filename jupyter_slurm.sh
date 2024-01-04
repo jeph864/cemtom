@@ -2,10 +2,10 @@
 #SBATCH -J topics_nb                      # the job name
 #SBATCH --nodes=1             # node count
 #SBATCH --ntasks=1              # total number of tasks across all nodes
-#SBATCH --mem=40G
+#SBATCH --mem=48G
 #SBATCH -t 4:00:00
-#SBATCH --gres=gpu:V100
-#SBATCH --cpus-per-task=8             # use 1 thread per taks
+#SBATCH --gres=gpu:V100:1
+#SBATCH --cpus-per-task=16             # use 1 thread per taks
 #SBATCH -N 1
 #SBATCH --partition=informatik-mind
 #SBATCH --output=output/jupyter_bert_out.txt         # capture output

@@ -41,6 +41,12 @@ class Dataset:
     def get_info(self):
         return self.__metadata
 
+    def __len__(self):
+        return 0 if self.__corpus is None else len(self.__corpus)
+
+    def __getitem__(self, idx):
+        return () if self.__corpus is None else (self.__corpus[idx], self.__labels[idx])
+
     def get_indices(self):
         return self.__indices
 
@@ -56,7 +62,7 @@ class Dataset:
                 train_indices, validation_indices = train_test_split(
                     train_indices, test_size=validation_size, random_state=random_state,
                     stratify=[self.__labels[i] for i in train_indices])
-            return train_indices, validation_indices, test_indices
+            # return train_indices, validation_indices, test_indices
         else:
             train_indices, test_indices = train_test_split(
                 range(len(self.__corpus)), test_size=test_size, random_state=random_state)
@@ -65,8 +71,9 @@ class Dataset:
                     train_indices, test_size=validation_size, random_state=random_state)
         new_corpus, new_labels = [], []
 
-        new_corpus_indices = train_indices.extend(validation_indices)
-        new_corpus_indices = new_corpus_indices.extend(test_indices)
+        new_corpus_indices = train_indices
+        new_corpus_indices.extend(validation_indices)
+        new_corpus_indices.extend(test_indices)
         for i in new_corpus_indices:
             new_corpus.append(self.__corpus[i])
         if self.__labels is not None:
@@ -83,7 +90,7 @@ class Dataset:
         if self.__corpus is None:
             raise CorpusNotFoundError()
         if "test_idx" not in self.__metadata:
-            return [self.__corpus]
+            return [self.__corpus, None]
         train_corpus, test_corpus = [], []
         if return_validation:
             if "validation_idx" in self.__metadata:
@@ -108,7 +115,7 @@ class Dataset:
                 test_corpus.append(self.__corpus[i])
             return train_corpus, test_corpus
 
-    def save(self, path, remove_partitions=False):
+    def save(self, path, remove_partitions=False, remove_empty_docs=True):
 
         metadata_path = '/metadata.json'
         labels_path = '/labels.txt'
@@ -116,8 +123,11 @@ class Dataset:
         corpus_path = '/corpus.tsv'
 
         Path(path).mkdir(parents=True, exist_ok=True)
-        train, test = self.get_partitioned()
-        parts = (train, test)
+        parts = self.get_partitioned()
+        train, test = [], []
+        if len(parts) == 2:
+            train, test = parts
+        # parts = (train, test)
         docs = []
         partition = []
         for i, part in enumerate(parts):
@@ -143,6 +153,8 @@ class Dataset:
         else:
             data['partition'] = ['train'] * len(docs)
         df = pd.DataFrame(data)
+        if remove_empty_docs:
+            df = df[~df['documents'].isnull()]
         df.to_csv(path + corpus_path, '\t', index=False, header=False)
         self.__save_json(path + metadata_path, self.__metadata)
         if self.__labels is not None:

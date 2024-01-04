@@ -17,15 +17,15 @@ class BaseHyperparameters(BaseParams):
     pass
 
 
-class AbstractModel:
+class TopicModel:
     pass
 
 
-class NTMBase(AbstractModel):
+class NTMBase(TopicModel):
     pass
 
 
-class CEModelBase(AbstractModel):
+class CEModelBase(TopicModel):
     pass
 
 
