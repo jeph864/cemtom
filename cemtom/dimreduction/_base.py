@@ -4,7 +4,9 @@ from sklearn.decomposition import PCA as PCAReducer
 
 
 class DimensionReductionBase:
-    def __init__(self, **params):
+    def __init__(self, nr_dims=None, model=None, **params):
+        self.nr_dims = nr_dims
+        self.model = model
         self.params = params
 
     def fit(self, X):
@@ -42,9 +44,10 @@ class TSNE(DimensionReductionBase):
 
 
 class PCA(DimensionReductionBase):
-    def __init__(self, n_components=2, **kwargs):
-        super().__init__(n_components=n_components, **kwargs)
-        self.model = PCAReducer(**self.params)
+    def __init__(self, nr_dims=2, **kwargs):
+        super().__init__(nr_dims=nr_dims)
+        self.nr_dims = nr_dims
+        self.model = PCAReducer(n_components=self.nr_dims)
 
     def fit_transform(self, data):
         return self.model.fit_transform(data)

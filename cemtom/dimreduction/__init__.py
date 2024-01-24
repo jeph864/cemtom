@@ -1,6 +1,6 @@
-from ._base import PCA
+from ._base import PCA, DimensionReductionBase
 
 __all__ = [
-    "PCA"
+    "PCA", "DimensionReductionBase"
 ]
 
