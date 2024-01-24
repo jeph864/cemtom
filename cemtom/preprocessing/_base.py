@@ -32,7 +32,7 @@ class Preprocessor:
                  should_split=True,
                  use_spacy_tokenizer=True,
                  token_dict=None,
-                 strip_accents=True
+                 strip_accents=True, vocabulary=None
                  ):
         self.strip_accents = strip_accents
         self.token_dict = token_dict
@@ -99,7 +99,34 @@ class Preprocessor:
         else:
             self.vectorizer = CountVectorizer(max_df=self.max_df, min_df=self.min_df, lowercase=self.lowercase,
                                               # token_pattern=r"(?u)\b[\w|\-]{" + str(self.min_chars) + r",}\b",
-                                              stop_words=self.stopwords)
+                                              stop_words=self.stopwords, vocabulary=vocabulary)
+
+    def get_word2doc_mapping(self, docs, use_vocab=True):
+        vocab = set()
+        if use_vocab:
+
+            global_vocab = self.vectorizer.get_feature_names_out()
+            mapping = {term: set() for term in global_vocab}
+            mapping_multi = {term: [] for term in global_vocab}
+            for i, doc in enumerate(docs):
+                words = doc.split()
+                for word in words:
+                    mapping[word].add(i)
+                    mapping_multi[word].append(i)
+        else:
+            mapping, mapping_multi = {},{}
+            for i, doc in enumerate(docs):
+                words = doc.split()
+                for word in words:
+                    if word not in vocab:
+                        vocab.add(word)
+                        mapping[word] = set()
+                        mapping[word].add(i)
+                        mapping_multi[word] = [i]
+                    else:
+                        mapping[word].add(i)
+                        mapping_multi[word].append(i)
+        return mapping, mapping_multi
 
     def split(self, docs_docs, docs_labels=None, docs_idx=None):
         if docs_labels is None:
@@ -224,7 +251,7 @@ class Preprocessor:
                 normalized_docs = list(map(self.normalize_doc, tqdm(docs)))
                 docs_list = list(map(self.tokenize_step, tqdm(list(self.tokenizer.pipe(normalized_docs)))))
             else:
-                docs_list = list(map(self.simple_steps, tqdm(docs)))
+                docs_list = list(map(self.normalize_doc, tqdm(docs)))
         docs = docs_list
         return docs
 
