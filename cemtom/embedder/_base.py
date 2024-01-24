@@ -2,7 +2,7 @@
 from sentence_transformers import SentenceTransformer
 import cohere
 from flair.embeddings import TransformerDocumentEmbeddings
-import tensorflow_hub as hub
+#import tensorflow_hub as hub
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.pipeline import Pipeline
 from sklearn.utils.validation import check_is_fitted
@@ -87,7 +87,7 @@ class SklearnEmbedder(EmbedderBase):
 class USEEmbedder(EmbedderBase):
     def __init__(self, model_url='https://tfhub.dev/google/universal-sentence-encoder/4'):
         super().__init__(model_url=model_url)
-        self.model = hub.load(model_url)
+        self.model = None#hub.load(model_url)
 
     def embed(self, documents):
         return self.model(documents)
