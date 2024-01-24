@@ -1,4 +1,8 @@
+import json
+import os
+
 import joblib
+import numpy as np
 
 from cemtom.clustering import ClusteringBase
 from cemtom.dimreduction import DimensionReductionBase
@@ -7,6 +11,8 @@ from cemtom.vectorizers import VectorizerBase
 
 from pathlib import Path
 from cemtom.utils import save_utils
+
+output = "output"
 
 
 class CEBTMBase:
@@ -20,8 +26,12 @@ class CEBTMBase:
                  vectorizer_model: VectorizerBase = None,
                  topic_representation_model=None,
                  verbose=False,
-                 name: str = ''
+                 name: str = '',
+                 output_dir='output',
+                 dataset="somedataset",
+                 nr_topics = 10
                  ):
+        self.nr_topics = nr_topics
         self.verbose = verbose
         self.topic_representation_model = topic_representation_model
         self.min_topic_size = min_topic_size
@@ -34,11 +44,14 @@ class CEBTMBase:
         self.model_name = name
         self.config = dict()
         self.representations = None
+        self.output_dir = output_dir
+        self.dataset = dataset
+        self.topic_words = None
 
-    def fit(self):
+    def fit(self, *args, **kwargs):
         pass
 
-    def fit_transform(self):
+    def fit_transform(self, *args, **kwargs):
         raise NotImplementedError
 
     def transform(self):
@@ -66,6 +79,28 @@ class CEBTMBase:
         pass
 
     def vectorize_topics(self):
+        pass
+
+    def get_topic_words(self):
+        return []
+
+    def save_topics(self, path=None):
+        if path is None:
+            path = 'topics.json'
+        output_dir = os.path.join(self.output_dir, self.model_name)
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        path = os.path.join(output_dir, path)
+        topic_words = self.get_topic_words()
+        topic_words = [list(topic) for topic in topic_words]
+        topics = {
+            'nr_topics': len(topic_words),
+            'topics': topic_words
+        }
+        with open(path, 'w') as file:
+            json.dump(topics, file)
+
+    def load_topics(self, path=None):
         pass
 
     def save(self, path, serialization="pickle", save_embedding_model=True, save_features=False):
