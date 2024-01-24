@@ -1,5 +1,3 @@
-
-
 /somedir/
 /output/*
 /.ipynb_checkpoints/
@@ -7,3 +5,4 @@
 /data/*
 __pycache__/
 /baselines/
+/.idea/
