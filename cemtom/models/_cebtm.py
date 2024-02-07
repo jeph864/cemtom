@@ -20,6 +20,7 @@ class CEBTMBase:
                  language="english",
                  nr_top_words=15,
                  min_topic_size: int = 15,
+                 nr_dimensions: int = None,
                  embedding_model: EmbedderBase = None,
                  clustering_model: ClusteringBase = None,
                  dim_reduction_model: DimensionReductionBase = None,
@@ -28,10 +29,11 @@ class CEBTMBase:
                  verbose=False,
                  name: str = '',
                  output_dir='output',
-                 dataset="somedataset",
-                 nr_topics = 10
+                 dataset="20NewsGroup",
+                 nr_topics=10
                  ):
         self.nr_topics = nr_topics
+        self.nr_dimensions = nr_dimensions
         self.verbose = verbose
         self.topic_representation_model = topic_representation_model
         self.min_topic_size = min_topic_size
@@ -47,6 +49,9 @@ class CEBTMBase:
         self.output_dir = output_dir
         self.dataset = dataset
         self.topic_words = None
+
+        self.dim_reduction_params = {}
+        self.clustering_params = {}
 
     def fit(self, *args, **kwargs):
         pass
@@ -93,9 +98,13 @@ class CEBTMBase:
         path = os.path.join(output_dir, path)
         topic_words = self.get_topic_words()
         topic_words = [list(topic) for topic in topic_words]
+        cluster_params = self.clustering_model.params
+        dimension_reduction_params = self.dim_reduction_model.params
         topics = {
             'nr_topics': len(topic_words),
-            'topics': topic_words
+            'topics': topic_words,
+            'cluster_params': cluster_params,
+            'dimension_reduction': dimension_reduction_params
         }
         with open(path, 'w') as file:
             json.dump(topics, file)

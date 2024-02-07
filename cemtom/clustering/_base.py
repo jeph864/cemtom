@@ -60,10 +60,11 @@ class ClusteringBase:
             return self.model.get_params()
 
 
-class HDBSCANClustering(ClusteringBase):
-    def __init__(self, min_cluster_size=5, min_samples=None, **kwargs):
-        super().__init__(min_cluster_size=min_cluster_size, min_samples=min_samples, **kwargs)
-        self.model = hdbscan.HDBSCAN(**self.params)
+class HDBSCAN(ClusteringBase):
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.params['name'] = 'hdbscan'
+        self.model = hdbscan.HDBSCAN(**kwargs)
 
     def fit(self, data):
         self.model.fit(data)
@@ -85,9 +86,9 @@ class DBSCANClustering(ClusteringBase):
 
 
 class KMeansClustering(ClusteringBase):
-    def __init__(self, n_clusters=8, random_state=42, sort=True):
-        super().__init__(n_clusters=n_clusters, random_state=random_state)
-        self.model = KMeans(n_clusters=n_clusters, random_state=random_state)
+    def __init__(self, n_clusters=8, random_state=42, sort=True, **params):
+        super().__init__(n_clusters=n_clusters, random_state=random_state, **params)
+        self.model = KMeans(n_clusters=n_clusters, random_state=random_state, **params)
         self.n_clusters = n_clusters
         self.random_state = random_state
         self.model = KMeans(n_clusters=self.n_clusters, random_state=self.random_state)
@@ -144,12 +145,16 @@ class GaussianMixture(ClusteringBase):
         self.model.fit(data)
         topk = []
         for i in range(self.model.n_components):
-            density = sp.stats.multivariate_normal(cov=self.model.covariances_[i], mean=self.model.means_[i]).logpdf(data)
+            density = sp.stats.multivariate_normal(cov=self.model.covariances_[i], mean=self.model.means_[i]).logpdf(
+                data)
             top_idx = density.argsort()[-1 * len(density):][::-1].astype(int)
             topk.append(top_idx)
         self.topk_sorted = topk
         self.m_clusters = self.model.predict(data)
         return np.vstack([topic[:k] for topic in self.topk_sorted])
+
+    def transform(self, data):
+        return self.predict(data)
 
     def get_sorted(self, embeddings=None, k=10):
         return np.vstack([topic[:k] for topic in self.topk_sorted])

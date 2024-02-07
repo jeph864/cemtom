@@ -16,6 +16,9 @@ class DimensionReductionBase:
     def fit_transform(self, X):
         raise NotImplementedError("This method should be implemented by subclasses.")
 
+    def transform(self, X):
+        raise NotImplementedError("This method should be implemented by subclasses.")
+
 
 class UMAP(DimensionReductionBase):
     def __init__(self,
@@ -25,13 +28,18 @@ class UMAP(DimensionReductionBase):
                  **kwargs
                  ):
         super().__init__(n_neighbors=n_neighbors, n_components=n_components, metric=metric, **kwargs)
-        self.model = UMAPReducer(self.params)
+        self.model = UMAPReducer(n_neighbors=n_neighbors, n_components=n_components, metric=metric, **kwargs)
+        self.params['name'] = 'umap'
+        self.params.update({'n_neighbors': n_neighbors, 'n_components': n_components, 'metric': metric})
 
-    def fit(self, X):
-        return self.model.fit(X)
+    def fit(self, X, y=None, force_all_finite=True):
+        return self.model.fit(X, y, force_all_finite)
 
-    def fit_transform(self, X):
-        return self.model.fit_transform(X)
+    def fit_transform(self, X, y=None, force_all_finite=True):
+        return self.model.fit_transform(X, y, force_all_finite)
+
+    def transform(self, X, force_all_finite=True):
+        return self.model.transform(X,force_all_finite)
 
 
 class TSNE(DimensionReductionBase):
@@ -46,6 +54,7 @@ class TSNE(DimensionReductionBase):
 class PCA(DimensionReductionBase):
     def __init__(self, nr_dims=2, **kwargs):
         super().__init__(nr_dims=nr_dims)
+        self.params['name'] = 'pca'
         self.nr_dims = nr_dims
         self.model = PCAReducer(n_components=self.nr_dims)
 

@@ -13,7 +13,8 @@ class Dataset:
                  labels=None,
                  metadata=None,
                  indices=None,
-                 preprocessed=False
+                 preprocessed=False,
+                 name='custom'
                  ):
         self.__df = None
         self.__indices = indices
@@ -23,6 +24,7 @@ class Dataset:
         self.__corpus = docs
         self.__path = None
         self.__cache = False
+        self.name = name
         self.preprocessed = preprocessed
 
     def _clean(self):
@@ -53,22 +55,23 @@ class Dataset:
     def tokenize(self):
         return [d.split() for d in self.__corpus]
 
-    def split(self, test_size=0.15, validation_size=0, random_state=None, stratify=None):
+    def split(self, test_size=0.15, validation_size=0, random_state=None, stratify=None, shuffle=False):
         validation_indices = []
         if self.__labels is not None:
             train_indices, test_indices = train_test_split(
-                range(len(self.__corpus)), test_size=test_size, random_state=random_state, stratify=stratify)
+                range(len(self.__corpus)), test_size=test_size, random_state=random_state, stratify=stratify,
+                shuffle=shuffle)
             if validation_size > 0:
                 train_indices, validation_indices = train_test_split(
-                    train_indices, test_size=validation_size, random_state=random_state,
+                    train_indices, test_size=validation_size, random_state=random_state, shuffle=shuffle,
                     stratify=[self.__labels[i] for i in train_indices])
             # return train_indices, validation_indices, test_indices
         else:
             train_indices, test_indices = train_test_split(
-                range(len(self.__corpus)), test_size=test_size, random_state=random_state)
+                range(len(self.__corpus)), test_size=test_size, random_state=random_state, shuffle=shuffle)
             if validation_size > 0:
                 train_indices, validation_indices = train_test_split(
-                    train_indices, test_size=validation_size, random_state=random_state)
+                    train_indices, test_size=validation_size, random_state=random_state, shuffle=shuffle)
         new_corpus, new_labels = [], []
 
         new_corpus_indices = train_indices
@@ -235,8 +238,6 @@ class CorpusInvalidStructureException(CorpusErrorException):
         super().__init__(message)
 
 
-class Preprocessing:
-    pass
 
 
 def download_dataset(dataset_name):

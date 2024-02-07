@@ -27,7 +27,7 @@ class Preprocessor:
                  remove_punctuation=True, remove_numbers=True, language="english",
                  min_df=0.0, max_df=1.0, min_words=0, punctuation=string.punctuation,
                  min_chars=1, stopwords_list=None,
-                 num_process=None, remove_spacy_stopwords=True, preprocessed=False,
+                 num_process=None, remove_spacy_stopwords=False, preprocessed=False,
                  vectorizer=None,
                  should_split=True,
                  use_spacy_tokenizer=True,
@@ -91,15 +91,27 @@ class Preprocessor:
         self.stopwords = stopwords
         self.stopwords.extend([token for name, token in self.token_dict.items()])
         # print(stopwords)
+        self.vectorizer_params = {
+            'max_df': self.max_df, 'min_df': self.min_df, 'lowercase': self.lowercase,
+            # 'token_pattern' : r"(?u)\b[\w|\-]{" + str(self.min_chars) + r",}\b",
+            'stop_words': self.stopwords
+        }
         if self.max_features is not None:
-            self.vectorizer = CountVectorizer(lowercase=self.lowercase, max_features=self.max_features,
-                                              stop_words=self.stopwords,
-                                              # token_pattern=r"(?u)\b[\w|\-]{" + str(self.min_chars) + r",}\b"
-                                              )
+            self.vectorizer_params = {
+                'max_features': self.max_features, 'lowercase': self.lowercase,
+                'stop_words': self.stopwords
+            }
+            self.vectorizer = CountVectorizer(**self.vectorizer_params)
         else:
-            self.vectorizer = CountVectorizer(max_df=self.max_df, min_df=self.min_df, lowercase=self.lowercase,
-                                              # token_pattern=r"(?u)\b[\w|\-]{" + str(self.min_chars) + r",}\b",
-                                              stop_words=self.stopwords, vocabulary=vocabulary)
+            self.vectorizer_params['vocabulary'] = vocabulary
+            self.vectorizer = CountVectorizer(**self.vectorizer_params)
+
+        self.data = None
+        self.vocabulary = None
+
+    def add_vectorizer_params(self, **params):
+        self.vectorizer_params.update(params)
+        self.vectorizer = CountVectorizer(**self.vectorizer_params)
 
     def get_word2doc_mapping(self, docs, use_vocab=True):
         vocab = set()
@@ -114,7 +126,7 @@ class Preprocessor:
                     mapping[word].add(i)
                     mapping_multi[word].append(i)
         else:
-            mapping, mapping_multi = {},{}
+            mapping, mapping_multi = {}, {}
             for i, doc in enumerate(docs):
                 words = doc.split()
                 for word in words:
@@ -188,6 +200,7 @@ class Preprocessor:
         print(f"Filtering {len(docs)}")
         # print(docs[0])
         if self.vocabulary is not None:
+
             vectorizer = TfidfVectorizer(max_df=self.max_df, min_df=self.min_df, vocabulary=self.vocabulary,
                                          token_pattern=r"(?u)\b\w{" + str(self.min_chars) + ",}\b",
                                          lowercase=self.lowercase, stop_words=self.stopwords)
@@ -265,12 +278,15 @@ class Preprocessor:
         new_doc = new_doc.replace('\n', ' ')
         return new_doc
 
-    def preprocess(self, docs_path, labels_path=None, num_processes=None, dataset=None):
+    def preprocess(self, docs_path=None, labels_path=None, num_processes=None, dataset=None):
+
         # self.should_split = split
         docs, labels = [], []
         doc_map_list = None
         docs_idx, docs_labels, docs_docs = [], [], []
+        dataset_name = 'preprocessed_custom'
         if dataset is not None:
+            dataset_name = f'preprocessed_{dataset.name}'
             docs = dataset.get_corpus()
             docs_docs = docs
             labels = dataset.get_labels()
@@ -283,14 +299,14 @@ class Preprocessor:
                 with open(docs_path, 'r') as infile:
                     docs = [line.strip() for line in infile.readlines()]
         docs = self.tokenize(docs)
-        vocabulary = self.filter(docs)
-        print(f"vocab created {len(vocabulary)}")
+        self.vocabulary = self.filter(docs)
+        print(f"vocab created {len(self.vocabulary)}")
         if dataset is None and labels_path is not None:
             with open(labels_path, 'r') as lines:
                 labels = [line.strip() for line in lines.readlines()]
         if len(labels) == 0:
             labels = None
-        vocab = set(vocabulary)
+        vocab = set(self.vocabulary)
         docs_docs, docs_labels, docs_idx = self.filter_docs_with_vocab(vocab, docs=docs, labels=labels)
         metadata = {"total_documents": len(docs), "vocabulary_length": len(vocab)}
         part_labels = None
@@ -298,11 +314,12 @@ class Preprocessor:
             part_corpus, part_labels, doc_indexes, part_metadata = self.split(docs_docs, docs_labels, docs_idx)
             metadata['validation_idx'] = part_metadata['validation_idx']
             metadata['test_idx'] = part_metadata['test_idx']
-            return Dataset(docs=part_corpus, vocabulary=vocab, metadata=metadata, labels=part_labels,
-                           indices=doc_indexes)
+            self.data = Dataset(docs=part_corpus, vocabulary=vocab, metadata=metadata, labels=part_labels,
+                                indices=doc_indexes, name=dataset_name)
         else:
-            return Dataset(docs=docs_docs, vocabulary=vocab, metadata=metadata, labels=docs_labels,
-                           indices=docs_idx)
+            self.data = Dataset(docs=docs_docs, vocabulary=vocab, metadata=metadata, labels=docs_labels,
+                                indices=docs_idx, name=dataset_name)
+        return self.data
 
     def filter_single_doc(self, doc):
         pass

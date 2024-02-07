@@ -193,6 +193,8 @@ class BaseWordEmbedder:
     def __init__(self, embedding_model=None):
         self.embedding_model = embedding_model
         self.__fit_status = False
+        self.embeddings = None
+        self.word2idx = None
 
     def is_fit(self):
         return self.__fit_status
@@ -358,6 +360,7 @@ class FasttextEmbedder(BaseWordEmbedder):
         self.embedding_model = embedding_model
         self.model_path = path
         self.model = None
+        self.word2idx = None
         if self.model_path is not None and os.path.exists(self.model_path):
             self.model = fasttext.load_model(self.model_path)
         elif self.embedding_model is not None:
@@ -379,3 +382,21 @@ def get_word_embedding_model(name=None, model=None, path=None):
         return BertVocabEmbedder.load_embeddings(path)
     else:
         return BaseWordEmbedder()
+
+
+def get_embeddings(name='bert', path=None, vocabulary=None, dataset=None):
+    embedding_model = None
+    embeddings = None
+    if name == "fasttext":
+        if vocabulary is None:
+            raise ValueError("vocabulary should not be None")
+        embedding_model = FasttextEmbedder(path=path)
+        embeddings = embedding_model.embed(vocabulary)
+    elif name == "bert":
+        embedding_model = BertVocabEmbedder.load_embeddings(path)
+        embeddings = embedding_model.embeddings
+        vocabulary = embedding_model.vocab
+    else:
+        raise NotImplementedError("Embedding Model mot implemented! ")
+    return embeddings,  vocabulary, embedding_model.word2idx, embedding_model
+

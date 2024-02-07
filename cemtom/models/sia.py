@@ -1,7 +1,9 @@
 import pandas as pd
 import numpy as np
+
+from cemtom.dataset import Dictionary
 from cemtom.embedder import FasttextEmbedder, get_word_embedding_model
-from cemtom.clustering import KMeansClustering, HDBSCANClustering
+from cemtom.clustering import KMeansClustering, HDBSCAN
 from sklearn.feature_extraction.text import CountVectorizer
 from cemtom.dimreduction import PCA as PCAReduction
 from cemtom.models import CEBTMBase
@@ -27,12 +29,12 @@ class Sia(CEBTMBase):
         if self.vectorizer is None:
             self.vectorizer = CountVectorizer()
             pass
-        self.reduction_model = reduction_model
-        if self.reduction_model is None:
-            self.reduction_model = PCAReduction(nr_dimensions)
+        self.dim_reduction_model = reduction_model
+        if self.dim_reduction_model is None:
+            self.dim_reduction_model = PCAReduction(nr_dimensions)
         if self.vocab is None:
             pass  # raise TypeError("Vocab should not be NoneType")
-        self.cluster_model = cluster_model
+        self.clustering_model = cluster_model
         self.labels_ = None
         self.rerank = rerank
         self.weighting = weighting
@@ -82,19 +84,19 @@ class Sia(CEBTMBase):
         else:
             raise ValueError("No Embeddings or embeddings model provided")
         print(f"vocab embeddings shape: {self.vocab_embeddings.shape}; documents shape : {len(documents)}")
-        if self.reduction_model is not None:
+        if self.dim_reduction_model is not None:
             print("reducing the dimensions")
-            vocab_embeddings = self.reduction_model.fit_transform(self.vocab_embeddings)
+            vocab_embeddings = self.dim_reduction_model.fit_transform(self.vocab_embeddings)
         elif self.nr_dimensions is not None:
             print("reducing the dimensions with PCA")
-            self.reduction_model = PCAReduction(nr_dims=self.nr_dimensions)
-            vocab_embeddings = self.reduction_model.fit_transform(self.vocab_embeddings)
+            self.dim_reduction_model = PCAReduction(nr_dims=self.nr_dimensions)
+            vocab_embeddings = self.dim_reduction_model.fit_transform(self.vocab_embeddings)
         # weighting
         weights = None
         if self.weighting is not None:
             if self.weighting == "wgt":
                 if word2doc is not None:
-                    weights = np.array([len(word2doc[word]) for word in vocab])
+                    weights = np.array([len(word2doc[word]) for word in self.vocab])
                 else:
                     weights = self.feat_mat.toarray().sum(axis=0)
                     print(f"weights shape(before) : {weights[0].shape}")
@@ -119,10 +121,10 @@ class Sia(CEBTMBase):
         return self.top_k, ranked_topk_words
 
     def _cluster_embeddings(self, vocab_embeddings, weights, word2doc=None):
-        if self.cluster_model is None:
-            self.cluster_model = KMeansClustering(n_clusters=self.nr_topics)
+        if self.clustering_model is None:
+            self.clustering_model = KMeansClustering(n_clusters=self.nr_topics)
             print("Using KMeans")
-        topk_word_idx = self.cluster_model.fit_transform(vocab_embeddings, sample_weight=weights, k=200)
+        topk_word_idx = self.clustering_model.fit_transform(vocab_embeddings, sample_weight=weights, k=200)
         print(f"sorted tops shape: {topk_word_idx.shape}")
         # print(f"Shape of the sorted topk words {sorted_tops.shape}")
         top_k_indices = None
@@ -130,7 +132,7 @@ class Sia(CEBTMBase):
             top_k_indices = self._find_top_k_words(100, topk_word_idx)
         else:
             top_k_indices = self._find_top_k_words(10, topk_word_idx)
-        return self.cluster_model.m_clusters, top_k_indices
+        return self.clustering_model.m_clusters, top_k_indices
     def _weight_words(self):
         pass
 

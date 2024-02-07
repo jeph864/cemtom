@@ -193,6 +193,6 @@ def fetch_dataset(
     test_idx = data_idx[0] + 1 if data_idx is not None else 0
     metadata = {"name": "20 Newsgroup", "nr_docs": len(data.data), "nr_labels": len(labels),
                 'test_idx': test_idx}
-    dataset = Dataset(metadata=metadata, docs=data.data, labels=labels, indices=doc_indices)
+    dataset = Dataset(metadata=metadata, docs=data.data, labels=labels, indices=doc_indices, name='20NewsGroup')
 
     return dataset
