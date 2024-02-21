@@ -10,8 +10,20 @@ from cemtom.dimreduction._base import (UMAP)
 from cemtom.clustering._base import (HDBSCAN, KMeansClustering, GaussianMixture)
 import argparse
 from cemtom.utils.save_utils import save_embeddings
+from torch.utils.data import DataLoader, Dataset as PyDataset
 
 pretrained_models = 'pretrained_models'
+
+
+class TextDataset(PyDataset):
+    def __init__(self, data):
+        self.data = data
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        return self.data[idx]
 
 
 class Trainer:
@@ -144,6 +156,22 @@ def get_data(dataset='20NewsGroup', vocabulary=None):
                         max_df=0.80, vocabulary=vocabulary)
     preprocessor.preprocess(None, dataset=data)
     return preprocessor, data
+
+
+def get_torch_data(dataset='20NewsGroup', batch_size=1):
+    pipe, data = get_data(dataset=dataset)
+    train_corpus, test_corpus = pipe.data.get_partitioned()
+    train_bow = pipe.transform(train_corpus)
+    test_bow = pipe.transform(test_corpus)
+    loader = {
+        'train': DataLoader(TextDataset(train_bow), batch_size, shuffle=True),
+        'test': DataLoader(TextDataset(test_bow), batch_size, shuffle=False),
+        'val': DataLoader(TextDataset(test_bow), batch_size, shuffle=False)
+    }
+    text = [ doc.split() for doc in train_corpus + test_corpus]
+
+    return loader, text, pipe.vectorizer.vocabulary_
+
 
 
 def get_clustering_model(algo='hdbscan', n_clusters=20, metric='euclidean', n_neighbors=10, min_cluster_size=30,
