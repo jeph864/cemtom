@@ -5,6 +5,53 @@ import numpy as np
 
 from sklearn.model_selection import train_test_split
 
+LABEL_SEPARATOR = ','
+def load_json(filename):
+    file = Path(filename)
+    data = dict()
+    if file.is_file():
+        with open(filename, 'r') as infile:
+            data = json.load(infile)
+    return data
+
+
+def save_json(filename, data):
+    if data is not None:
+        with open(filename, 'w') as out:
+            json.dump(data, out)
+    else:
+        raise Exception("error in saving file")
+
+
+def save_iterable_text(filename, data):
+    # file = Path(filename)
+    with open(filename, 'w') as outfile:
+        for i in data:
+            if isinstance(i, list):
+                i = ",".join(i)
+            outfile.write(str(i) + "\n")
+
+
+def load_iterable_text(filename):
+    data = []
+    file = Path(filename)
+    if file.is_file():
+        with open(filename, 'r') as infile:
+            for line in infile:
+                data.append(line.strip())
+    return data if len(data) > 0 else None
+
+
+def load_dataset(path, name='custom', multilabel=False):
+    vocabulary = load_iterable_text(path + '/vocab.txt')
+    metadata = load_json(path + '/metadata.json')
+    indices = load_iterable_text(path + '/indices.txt')
+    documents = load_iterable_text(path + '/documents.txt')
+    labels = load_iterable_text(path + '/labels.txt')
+    if multilabel:
+        labels = [label.split(',') for label in labels]
+    return Dataset(docs=documents, labels=labels, vocabulary=vocabulary, indices=indices, metadata=metadata)
+
 
 class Dataset:
     def __init__(self,
@@ -47,7 +94,15 @@ class Dataset:
         return 0 if self.__corpus is None else len(self.__corpus)
 
     def __getitem__(self, idx):
-        return () if self.__corpus is None else (self.__corpus[idx], self.__labels[idx])
+        item = None
+        if (self.__labels is not None and len(self.__labels) > 0) and self.__corpus is not None:
+            item = (self.__corpus[idx], self.__labels[idx])
+        elif self.__corpus is not None:
+            item = (self.__corpus[idx], '')
+        else:
+            raise IndexError("Index out of bound")
+
+        return item
 
     def get_indices(self):
         return self.__indices
@@ -118,7 +173,7 @@ class Dataset:
                 test_corpus.append(self.__corpus[i])
             return train_corpus, test_corpus
 
-    def save(self, path, remove_partitions=False, remove_empty_docs=True):
+    def save(self, path, remove_partitions=False, remove_empty_docs=True, dummy_label='label', mallet=False):
 
         metadata_path = '/metadata.json'
         labels_path = '/labels.txt'
@@ -149,31 +204,37 @@ class Dataset:
         else:
             doc_indices = np.arange(len(docs))
         data['indices'] = doc_indices
-        data['labels'] = self.__labels
+        if not isinstance(self.__labels, list) or len(self.__labels) == 0:
+            data['labels'] = [dummy_label] * len(docs)
+        else:
+            data['labels'] = self.__labels
+            if isinstance(self.__labels[0], list):
+                data['labels'] = data['labels'].apply(lambda x: ','.join(x))
+
         data['documents'] = docs
         if not remove_partitions:
             data['partition'] = partition
-        else:
+        elif not mallet:
             data['partition'] = ['train'] * len(docs)
         df = pd.DataFrame(data)
         if remove_empty_docs:
             df = df[~df['documents'].isnull()]
         df.to_csv(path + corpus_path, '\t', index=False, header=False)
-        self.__save_json(path + metadata_path, self.__metadata)
+        save_json(path + metadata_path, self.__metadata)
         if self.__labels is not None:
-            self.__save_iterable_text(path + labels_path, self.__labels)
+            save_iterable_text(path + labels_path, self.__labels)
         if self.__vocabulary is not None:
-            self.__save_iterable_text(path + vocab_path, self.__vocabulary)
+            save_iterable_text(path + vocab_path, self.__vocabulary)
         if self.__indices is not None:
-            self.__save_iterable_text(path + '/indices.txt', self.__indices)
+            save_iterable_text(path + '/indices.txt', self.__indices)
         if self.__corpus:
-            self.__save_iterable_text(path + '/documents.txt', docs)
+            save_iterable_text(path + '/documents.txt', docs)
         self.__path = path
 
-    def load(self, path):
+    def load_from_tsv(self, path):
         self.__path = path
-        self.__vocabulary = self.__load_iterable_text(self.__path + '/vocabulary.txt')
-        self.__metadata = self.__load_json(self.__path + '/metadata.json')
+        self.__vocabulary = load_iterable_text(self.__path + '/vocabulary.txt')
+        self.__metadata = load_json(self.__path + '/metadata.json')
         tmp_df = pd.read_csv(self.__path + "/corpus.tsv", sep='\t', header=None)
         corpus = pd.concat([tmp_df[tmp_df[3] == 'train'], tmp_df[tmp_df[3] == 'val'], tmp_df[tmp_df[3] == 'test']])
         self.__corpus = [d for d in corpus[2].tolist()]
@@ -192,36 +253,6 @@ class Dataset:
         self.__df = corpus
         return self.__df
 
-    def __load_iterable_text(self, filename):
-        data = []
-        file = Path(filename)
-        if file.is_file():
-            with open(filename, 'r') as infile:
-                for line in infile:
-                    data.append(line.strip())
-        return data
-
-    def __save_iterable_text(self, filename, data):
-        # file = Path(filename)
-        with open(filename, 'w') as outfile:
-            for i in data:
-                outfile.write(str(i) + "\n")
-
-    def __save_json(self, filename, data):
-        if data is not None:
-            with open(filename, 'w') as out:
-                json.dump(data, out)
-        else:
-            raise Exception("error in saving file")
-
-    def __load_json(self, filename):
-        file = Path(filename)
-        data = dict()
-        if file.is_file():
-            with open(filename, 'r') as infile:
-                data = json.load(infile)
-        return data
-
 
 class CorpusErrorException(Exception):
     def __init__(self, message="Corpus Error. "):
@@ -236,8 +267,6 @@ class CorpusNotFoundError(CorpusErrorException):
 class CorpusInvalidStructureException(CorpusErrorException):
     def __init__(self, message="Invalid Structure"):
         super().__init__(message)
-
-
 
 
 def download_dataset(dataset_name):

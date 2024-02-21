@@ -9,6 +9,7 @@ from tqdm import tqdm
 from tqdm.contrib.concurrent import process_map
 from collections import Counter
 from ..dataset.dataset import Dataset, CorpusNotFoundError
+from concurrent.futures import ProcessPoolExecutor
 
 spacy_model_mapping = {
     'chinese': 'zh_core_web_sm', 'danish': 'nl_core_news_sm',
@@ -32,7 +33,8 @@ class Preprocessor:
                  should_split=True,
                  use_spacy_tokenizer=True,
                  token_dict=None,
-                 strip_accents=True, vocabulary=None
+                 strip_accents=True, vocabulary=None,
+                 batch_size=1000
                  ):
         self.strip_accents = strip_accents
         self.token_dict = token_dict
@@ -56,17 +58,19 @@ class Preprocessor:
         self.language = language
         self.max_features = None
         self.num_processes = num_process
+        self.batch_size = batch_size
         self.should_split = should_split
 
         self.preprocessed = preprocessed
         self.tokenizer = None
+        self.bow = None
 
         if self.use_spacy_tokenizer or self.lemmatize:
             if self.token_dict is None:
                 self.token_dict = {}
             lang = spacy_model_mapping[self.language]
             try:
-                self.spacy_model = spacy.load(lang)
+                self.spacy_model = spacy.load(lang, disable=["ner", "parser", "tagger"])
                 self.tokenizer = self.spacy_model.tokenizer
             except IOError:
                 raise IOError("Can't find model " + lang + ". Check the data directory or download it using the "
@@ -140,7 +144,7 @@ class Preprocessor:
                         mapping_multi[word].append(i)
         return mapping, mapping_multi
 
-    def split(self, docs_docs, docs_labels=None, docs_idx=None):
+    def split(self, docs_docs, docs_labels=None, docs_idx=None, shuffle=False):
         if docs_labels is None:
             docs_labels = []
         metadata = {
@@ -151,10 +155,10 @@ class Preprocessor:
         if len(docs_labels) > 0:
             train, test, y_train, y_test = train_test_split(
                 range(len(docs_docs)), docs_labels, test_size=0.15, random_state=1,
-                shuffle=True)
+                shuffle=shuffle)
 
             train, validation = train_test_split(train, test_size=3 / 17, random_state=1,
-                                                 shuffle=True)  # stratify=y_train)
+                                                 shuffle=shuffle)  # stratify=y_train)
 
             part_labels = [docs_labels[doc] for doc in train + validation + test]
             part_corpus = [docs_docs[doc] for doc in train + validation + test]
@@ -162,8 +166,8 @@ class Preprocessor:
             metadata['validation_idx'] = len(train)
             metadata['test_idx'] = len(train) + len(validation)
         else:
-            train, test = train_test_split(range(len(docs_docs)), test_size=0.15, random_state=1)
-            train, validation = train_test_split(train, test_size=3 / 17, random_state=1)
+            train, test = train_test_split(range(len(docs_docs)), test_size=0.15, random_state=1, shuffle=shuffle)
+            train, validation = train_test_split(train, test_size=3 / 17, random_state=1, shuffle=shuffle)
 
             part_corpus = [docs_docs[doc] for doc in train + validation + test]
             doc_indexes = [docs_idx[doc] for doc in train + validation + test]
@@ -200,13 +204,12 @@ class Preprocessor:
         print(f"Filtering {len(docs)}")
         # print(docs[0])
         if self.vocabulary is not None:
-
             vectorizer = TfidfVectorizer(max_df=self.max_df, min_df=self.min_df, vocabulary=self.vocabulary,
                                          token_pattern=r"(?u)\b\w{" + str(self.min_chars) + ",}\b",
                                          lowercase=self.lowercase, stop_words=self.stopwords)
             self.vectorizer = vectorizer
 
-        self.vectorizer.fit_transform(docs)
+        self.bow = self.vectorizer.fit_transform(docs)
         vocabulary = self.vectorizer.get_feature_names_out()
         return vocabulary
 
@@ -240,7 +243,66 @@ class Preprocessor:
         new_doc = " ".join(new_doc)
         return new_doc
 
-    def tokenize(self, docs):
+    def batch_generator(self, iterable, batch_size=1):
+        l = len(iterable)
+        for ndx in range(0, l, batch_size):
+            yield iterable[ndx:min(ndx + batch_size, l)]
+
+    def process_docs_serially(self, docs, size=None):
+        """Process documents serially with explicit batching."""
+        for batch in tqdm(self.batch_generator(docs, self.batch_size), desc="Processing batches serially",
+                          total=size // self.batch_size):
+            # Normalize documents in the batch first
+            normalized_batch = list(map(self.normalize_doc, batch))
+            if self.use_spacy_tokenizer:
+                for doc in self.tokenizer.pipe(normalized_batch, batch_size=self.batch_size):
+                    yield self.tokenize_step(doc)
+            else:
+                for doc in normalized_batch:
+                    yield self.simple_steps(doc)
+
+    def process_docs_parallel(self, docs, chunksize, size=None):
+        """Process documents in parallel with explicit batching."""
+        with ProcessPoolExecutor(max_workers=self.num_processes) as executor:
+            # Normalize first, then tokenize or apply simple steps
+            normalized_docs = [self.normalize_doc(doc) for doc in docs]
+            futures = []
+            if self.use_spacy_tokenizer:
+                for batch in self.batch_generator(normalized_docs, self.batch_size):
+                    futures.extend([executor.submit(self.tokenize_step, doc) for doc in
+                                    self.tokenizer.pipe(batch, batch_size=chunksize)])
+            else:
+                futures = [executor.submit(self.simple_steps, doc) for doc in normalized_docs]
+
+            for future in tqdm(as_completed(futures), total=len(futures), desc="Processing in parallel"):
+                yield future.result()
+
+    def tokenize(self, docs, size=None):
+        single_run = False
+        if isinstance(docs, str):
+            docs = [docs]
+            single_run = True
+
+        docs_iter = docs  # if isinstance(docs, (list, tuple)) else [docs]
+
+        # Determine chunksize for parallel processing
+        chunksize = 1
+        if self.num_processes is not None:
+            chunksize = max(1, len(docs_iter) // (self.num_processes * 20))
+
+        # Choose processing path
+        if self.num_processes is not None:
+            processed_docs = list(self.process_docs_parallel(docs_iter, chunksize, size=size))
+        else:
+            processed_docs = list(self.process_docs_serially(docs_iter, size=size))
+
+        if single_run:
+            return processed_docs[0]  # Return the first document processed
+
+        return processed_docs
+
+    def tokenize_native(self, docs):
+
         single_run = False
         if not isinstance(docs, spacy.tokens.doc.Doc):
             if isinstance(docs, str):
@@ -285,6 +347,7 @@ class Preprocessor:
         doc_map_list = None
         docs_idx, docs_labels, docs_docs = [], [], []
         dataset_name = 'preprocessed_custom'
+        size = None
         if dataset is not None:
             dataset_name = f'preprocessed_{dataset.name}'
             docs = dataset.get_corpus()
@@ -292,19 +355,20 @@ class Preprocessor:
             labels = dataset.get_labels()
             docs_idx = dataset.get_indices()
             docs_labels = labels
+            size = len(dataset)
         else:
             if docs_path is None:
                 raise CorpusNotFoundError()
             else:
                 with open(docs_path, 'r') as infile:
                     docs = [line.strip() for line in infile.readlines()]
-        docs = self.tokenize(docs)
+        docs = self.tokenize(docs, size=size)
         self.vocabulary = self.filter(docs)
-        print(f"vocab created {len(self.vocabulary)}")
+        # print(f"vocab created {len(self.vocabulary)}")
         if dataset is None and labels_path is not None:
             with open(labels_path, 'r') as lines:
                 labels = [line.strip() for line in lines.readlines()]
-        if len(labels) == 0:
+        if labels is not None and len(labels) == 0:
             labels = None
         vocab = set(self.vocabulary)
         docs_docs, docs_labels, docs_idx = self.filter_docs_with_vocab(vocab, docs=docs, labels=labels)
@@ -337,8 +401,8 @@ class Preprocessor:
                     docs_docs.append(" ".join(new_doc))
                     docs_labels.append(label)
                     docs_idx.append(i)
-            labels_to_remove = set([k for k, v in dict(
-                Counter(docs_labels)).items() if v <= 3])
+            labels_to_remove = []  # set([k for k, v in dict(
+            # Counter(docs_labels)).items() if v <= 3])
             if len(labels_to_remove) > 0:
                 docs = docs_docs
                 labels = docs_labels
@@ -352,6 +416,9 @@ class Preprocessor:
             for i, doc in enumerate(docs):
                 new_doc = [w for w in doc.split() if w in vocab]
                 if len(new_doc) > self.min_words:
-                    docs_docs.append(new_doc)
+                    docs_docs.append(" ".join(new_doc))
                     docs_idx.append(i)
         return docs_docs, docs_labels, docs_idx
+
+    def transform(self, docs):
+        return self.vectorizer.transform(docs).toarray()
