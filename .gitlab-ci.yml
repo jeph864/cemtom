@@ -12,5 +12,5 @@ mirror_repository:
     - 'git remote remove github || true'
     - git remote add github https://${GITHUB_TOKEN}@github.com/jeph864/cemtom.git
     - git fetch origin main
-    - git push github refs/heads/main:refs/heads/gmain
+    - git push -u github origin/main:gmain
 
