@@ -11,5 +11,6 @@ mirror_repository:
     - git config --global user.name "jeph864"
     - 'git remote remove github || true'
     - git remote add github https://github.com/jeph864/cemtom.git
-    - 'git push --mirror https://${GITHUB_TOKEN}@github.com/jeph864/cemtom.git'
+    - git fetch origin main
+    - git push github origin/main:gmain
 
