@@ -10,5 +10,5 @@ mirror_repository:
     - git config --global user.email "abijuru@rhrk.uni-kl.de"
     - git config --global user.name "jeph864"
     - git remote add github https://github.com/jeph864/cemtom.git
-    - 'git push --mirror https://${GITHUB_TOKEN}@${CI_REPOSITORY_URL#*@}'
+    - 'git push --mirror https://${GITHUB_TOKEN}@https://github.com/jeph864/cemtom.git'
 
