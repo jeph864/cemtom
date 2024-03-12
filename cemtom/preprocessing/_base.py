@@ -26,7 +26,7 @@ class Preprocessor:
     def __init__(self,
                  lowercase=True, lemmatize=False,
                  remove_punctuation=True, remove_numbers=True, language="english",
-                 min_df=0.0, max_df=1.0, min_words=0, punctuation=string.punctuation,
+                 min_df=0.0, max_df=1.0, max_features=None, min_words=0, punctuation=string.punctuation,
                  min_chars=1, stopwords_list=None,
                  num_process=None, remove_spacy_stopwords=False, preprocessed=False,
                  vectorizer=None,
@@ -56,7 +56,7 @@ class Preprocessor:
         self.punctuation = punctuation
         self.remove_spacy_stopwords = remove_spacy_stopwords
         self.language = language
-        self.max_features = None
+        self.max_features = max_features
         self.num_processes = num_process
         self.batch_size = batch_size
         self.should_split = should_split
@@ -65,7 +65,7 @@ class Preprocessor:
         self.tokenizer = None
         self.bow = None
 
-        if self.use_spacy_tokenizer or self.lemmatize:
+        if self.use_spacy_tokenizer:
             if self.token_dict is None:
                 self.token_dict = {}
             lang = spacy_model_mapping[self.language]
@@ -94,21 +94,15 @@ class Preprocessor:
                         assert stopwords_list == language
         self.stopwords = stopwords
         self.stopwords.extend([token for name, token in self.token_dict.items()])
+        self.stopwords.extend([token.replace("<", "").replace(">", "").replace("/", "").strip() for name, token in
+                               self.token_dict.items()])
+        self.stopwords.extend(list(string.punctuation))
         # print(stopwords)
-        self.vectorizer_params = {
-            'max_df': self.max_df, 'min_df': self.min_df, 'lowercase': self.lowercase,
-            # 'token_pattern' : r"(?u)\b[\w|\-]{" + str(self.min_chars) + r",}\b",
-            'stop_words': self.stopwords
-        }
-        if self.max_features is not None:
-            self.vectorizer_params = {
-                'max_features': self.max_features, 'lowercase': self.lowercase,
-                'stop_words': self.stopwords
-            }
-            self.vectorizer = CountVectorizer(**self.vectorizer_params)
-        else:
-            self.vectorizer_params['vocabulary'] = vocabulary
-            self.vectorizer = CountVectorizer(**self.vectorizer_params)
+        self.vectorizer_params = {'max_df': self.max_df, 'min_df': self.min_df, 'lowercase': self.lowercase,
+                                  'max_features': self.max_features,
+                                  'token_pattern': r"(?u)\b[\w|\-]{" + str(self.min_chars) + r",}\b",
+                                  'stop_words': self.stopwords, 'vocabulary': vocabulary}
+        self.vectorizer = CountVectorizer(**self.vectorizer_params)
 
         self.data = None
         self.vocabulary = None
@@ -144,7 +138,7 @@ class Preprocessor:
                         mapping_multi[word].append(i)
         return mapping, mapping_multi
 
-    def split(self, docs_docs, docs_labels=None, docs_idx=None, shuffle=False):
+    def split(self, docs_docs, docs_labels=None, docs_idx=None, shuffle=False, test_size=0.30):
         if docs_labels is None:
             docs_labels = []
         metadata = {
@@ -154,7 +148,7 @@ class Preprocessor:
         part_labels, part_corpus, doc_indexes = docs_labels, docs_docs, docs_idx
         if len(docs_labels) > 0:
             train, test, y_train, y_test = train_test_split(
-                range(len(docs_docs)), docs_labels, test_size=0.15, random_state=1,
+                range(len(docs_docs)), docs_labels, test_size=test_size, random_state=1,
                 shuffle=shuffle)
 
             train, validation = train_test_split(train, test_size=3 / 17, random_state=1,
@@ -166,7 +160,7 @@ class Preprocessor:
             metadata['validation_idx'] = len(train)
             metadata['test_idx'] = len(train) + len(validation)
         else:
-            train, test = train_test_split(range(len(docs_docs)), test_size=0.15, random_state=1, shuffle=shuffle)
+            train, test = train_test_split(range(len(docs_docs)), test_size=test_size, random_state=1, shuffle=shuffle)
             train, validation = train_test_split(train, test_size=3 / 17, random_state=1, shuffle=shuffle)
 
             part_corpus = [docs_docs[doc] for doc in train + validation + test]
@@ -201,15 +195,13 @@ class Preprocessor:
         return new_d
 
     def filter(self, docs):
-        print(f"Filtering {len(docs)}")
-        # print(docs[0])
         if self.vocabulary is not None:
             vectorizer = TfidfVectorizer(max_df=self.max_df, min_df=self.min_df, vocabulary=self.vocabulary,
                                          token_pattern=r"(?u)\b\w{" + str(self.min_chars) + ",}\b",
                                          lowercase=self.lowercase, stop_words=self.stopwords)
             self.vectorizer = vectorizer
 
-        self.bow = self.vectorizer.fit_transform(docs)
+        self.bow = self.vectorizer.fit_transform(docs).toarray()
         vocabulary = self.vectorizer.get_feature_names_out()
         return vocabulary
 
@@ -340,7 +332,7 @@ class Preprocessor:
         new_doc = new_doc.replace('\n', ' ')
         return new_doc
 
-    def preprocess(self, docs_path=None, labels_path=None, num_processes=None, dataset=None):
+    def preprocess(self, documents=None, labels_path=None, num_processes=None, dataset=None):
 
         # self.should_split = split
         docs, labels = [], []
@@ -357,14 +349,15 @@ class Preprocessor:
             docs_labels = labels
             size = len(dataset)
         else:
-            if docs_path is None:
+            if documents is None:
                 raise CorpusNotFoundError()
             else:
-                with open(docs_path, 'r') as infile:
-                    docs = [line.strip() for line in infile.readlines()]
-        docs = self.tokenize(docs, size=size)
+                size = len(documents)
+                # with open(docs_path, 'r') as infile:
+                #    docs = [line.strip() for line in infile.readlines()]
+        docs = self.tokenize(documents, size=size)
+        self.text = docs
         self.vocabulary = self.filter(docs)
-        # print(f"vocab created {len(self.vocabulary)}")
         if dataset is None and labels_path is not None:
             with open(labels_path, 'r') as lines:
                 labels = [line.strip() for line in lines.readlines()]
@@ -372,6 +365,8 @@ class Preprocessor:
             labels = None
         vocab = set(self.vocabulary)
         docs_docs, docs_labels, docs_idx = self.filter_docs_with_vocab(vocab, docs=docs, labels=labels)
+        # refit the documents:
+        # new_vecctorizer =
         metadata = {"total_documents": len(docs), "vocabulary_length": len(vocab)}
         part_labels = None
         if self.should_split:
@@ -420,5 +415,10 @@ class Preprocessor:
                     docs_idx.append(i)
         return docs_docs, docs_labels, docs_idx
 
-    def transform(self, docs):
-        return self.vectorizer.transform(docs).toarray()
+    def transform(self, docs, retokenize=True):
+        if self.data is None:
+            raise Exception("No data yet registered")
+        if retokenize:
+            docs = self.tokenize(docs, size=len(docs))
+            docs, _, _ = self.filter_docs_with_vocab(self.vectorizer.vocabulary_, docs)
+        return self.vectorizer.transform(docs).toarray(), docs

@@ -4,7 +4,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, TensorDataset
-from torch.distributions import Normal, Dirichlet, kl_divergence
+from torch.distributions import Normal, Dirichlet, LogNormal, LogisticNormal, kl_divergence
+
+
+class Trainer:
+    pass
 
 
 class VAEBase(pl.LightningModule):
@@ -31,6 +35,7 @@ class VAEBase(pl.LightningModule):
     def reparameterize(self, mu, logvar):
         std = torch.exp(0.5 * logvar)
         dist = Normal(mu, std)
+        eps = torch.randn_like(std)
         if self.training:
             z = dist.rsample()
         else:
@@ -166,3 +171,53 @@ class InferenceNet(nn.Module):
 
     def out(self, x):
         return self.output_layer(self.dropout(self.hidden_layers(self.activation(self.input(x)))))
+
+
+class LatentSampler(nn.Module):
+    pass
+
+
+class HiddenToDirichlet(nn.Module):
+    def __init__(self, last_hidden_dim, latent_dim, batch_norm=True):
+        super(HiddenToDirichlet, self).__init__()
+        self.last_hidden_dim = last_hidden_dim
+        self.latent_dim = latent_dim
+        self.fc = nn.Linear(in_features=self.last_hidden_dim, out_features=self.latent_dim)
+        self.batch_norm = nn.BatchNorm1d(self.latent_dim)
+
+    def forward(self, hidden):
+        alphas = self.batch_norm(self.fc(hidden)).exp()
+        dist = Dirichlet(alphas)
+        return dist
+
+
+class HiddenToNormal(nn.Module):
+    def __init__(self, last_hidden_dim, latent_dim, batch_norm=True, distribution='normal'):
+        super(HiddenToNormal, self).__init__()
+        self.distribution = distribution
+        self.last_hidden_dim = last_hidden_dim
+        self.latent_dim = latent_dim
+        self.mean = nn.Linear(in_features=self.last_hidden_dim, out_features=self.latent_dim)
+        self.logvar = nn.Linear(in_features=self.last_hidden_dim, out_features=self.latent_dim)
+        # batch normalization
+        self.mean_batch_norm = None
+        self.logvar_batch_norm = None
+        if batch_norm:
+            self.mean_batch_norm = nn.BatchNorm1d(num_features=self.latent_dim, affine=False)
+            self.logvar_batch_norm = nn.BatchNorm1d(num_features=self.latent_dim, affine=False)
+
+    def forward(self, hidden):
+        mean = self.mean_batch_norm(self.mean(hidden))
+        log_var = self.logvar_batch_norm(self.logvar(hidden))
+        var = torch.exp(0.5 * log_var)
+        dist = None
+        if self.distribution == 'normal':
+            dist = Normal(mean, var)
+        elif self.distribution == 'log_normal':
+            dist = LogNormal(mean, var)
+        elif self.distribution == 'logistic_normal':
+            dist = LogisticNormal(mean, var)
+        return dist
+
+
+

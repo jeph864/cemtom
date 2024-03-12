@@ -6,6 +6,8 @@ import numpy as np
 from sklearn.model_selection import train_test_split
 
 LABEL_SEPARATOR = ','
+
+
 def load_json(filename):
     file = Path(filename)
     data = dict()
