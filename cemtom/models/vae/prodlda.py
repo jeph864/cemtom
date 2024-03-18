@@ -159,8 +159,8 @@ class ProdLDAAuthors(nn.Module):
         self.f_sigma = nn.Linear(self.hidden_dims[-1], self.topic_size)
         self.f_sigma_batchnorm = nn.BatchNorm1d(self.topic_size, affine=False)
 
-        # self.decoder = ProdLDAGenNet(latent_size=topic_size, output_size=vocab_size)
-        self.decoder = ProdLDAFCGenNet(topic_size, vocab_size)
+        self.decoder = ProdLDAGenNet(latent_size=topic_size, output_size=vocab_size)
+        #self.decoder = ProdLDAFCGenNet(topic_size, vocab_size)
 
         """self.beta = torch.Tensor(topic_size, vocab_size)
         self.beta = nn.Parameter(self.beta)
@@ -192,10 +192,10 @@ class ProdLDAAuthors(nn.Module):
             z = dist.rsample()
         else:
             z = dist.mean
-        # eps = torch.randn_like(std)
-        return z, dist  # eps.mul(std).add_(mu)
+        eps = torch.randn_like(std)
+        return eps.mul(std).add_(mu), dist  # eps.mul(std).add_(mu)
 
-    def forward(self, x):
+    def forward(self, x, *args):
         hidden = self.encoder(x)
 
         posterior_mu = self.f_mu_batchnorm(self.f_mu(hidden))

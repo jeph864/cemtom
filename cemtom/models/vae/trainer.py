@@ -11,8 +11,8 @@ from .vae import BaseVAE
 
 
 class Trainer:
-    def __init__(self, model: BaseVAE, train_loader, val_loader, optimizer, device,
-                 model_path=None, hyperparameters=None
+    def __init__(self, model: BaseVAE, train_loader, val_loader, optimizer, device, dataset,
+                 model_path=None, hyperparameters=None, patience=5
                  ):
 
         self.model = model
@@ -20,16 +20,18 @@ class Trainer:
         self.val_loader = val_loader
         self.optimizer = optimizer
         self.device = device
+        self.dataset = dataset
 
         # Initialize placeholders for the best distributions
         self.best_doc_topic_dist = None
         self.best_topic_word_dist = None
         self.best_val_loss = float('inf')
         self.best_loss_train = None
+        self.best_components = None
 
         self.hyperparameters = hyperparameters
         if self.hyperparameters is None:
-            self.hyperparameters = {'name': self.model.__class__.__name__.lower()}
+            self.hyperparameters = {'name': self.model.__class__.__name__.lower(), 'dataset': dataset}
         assert isinstance(self.hyperparameters, dict), "Hyperparameters should be a dictionary"
 
         self.save_dir = model_path
@@ -38,7 +40,7 @@ class Trainer:
         self.save_dir = os.path.join(self.save_dir, self._format_file())
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
-        self.early_stopping = EarlyStopping(patience=5, verbose=False,
+        self.early_stopping = EarlyStopping(patience=patience, verbose=False,
                                             path=os.path.join(self.save_dir, f'checkpoint.pt'))
 
         self.n_epoch = None
@@ -215,7 +217,6 @@ class Trainer:
     def get_topics(self, idx2token, k=10):
         best_component = self.best_topic_word_dist.data
         topic_size = best_component.shape[0]
-        k = 10
         topics_list = []
         topics = defaultdict(list)
         for i in range(topic_size):
@@ -233,14 +234,17 @@ class Trainer:
             json.dump({'topics': topics, 'evaluation': evaluation}, file)
 
     def _format_file(self):
-        model_dir = "{}_topics_{}_ac_{}_do_{}_lr_{}_mo_{}".format(
+        model_dir = "{}_{}_topics_{}_ac_{}_do_{}_lr_{}_mo_{}".format(
             self.model.__class__.__name__.lower(),
+            self.hyperparameters['dataset'],
             self.hyperparameters['topic_size'],
             self.hyperparameters['activation'],
             self.hyperparameters['dropout'],
             self.hyperparameters['lr'],
             self.hyperparameters['momentum'],
         )
+        if 'hidden_dims' in self.hyperparameters:
+            model_dir = model_dir + f'_in_{"x".join([str(dim) for dim in self.hyperparameters["hidden_dims"]])}'
         if 'embedding_size' in self.hyperparameters:
             model_dir = model_dir + f'_emb_{self.hyperparameters["embedding_size"]}'
         return model_dir

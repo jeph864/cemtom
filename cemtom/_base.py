@@ -174,10 +174,10 @@ def get_data(dataset='20NewsGroup', vocabulary=None):
     else:
         raise ValueError('Dataset does not exist')
     preprocessor = Pipe(stopwords_list="english", remove_spacy_stopwords=False,
-                        min_chars=3, max_features=2000,
+                        min_chars=3, max_features=2000, min_words=5,
                         token_dict=token_dict, use_spacy_tokenizer=True, min_df=20,
                         max_df=0.80, vocabulary=vocabulary)
-    preprocessor.preprocess(train_text, dataset=None)
+    preprocessor.preprocess(train_text + val_text, dataset=None)
     return preprocessor, (train_text, val_text)
 
 
@@ -202,6 +202,7 @@ def renormalize_bow(train_data, test_data, pipe):
 def get_torch_data(dataset='20NewsGroup', sbert_model=None, max_seq_length=None, batch_size=200, renormalize=False):
     pipe, data = get_data(dataset=dataset)
     train_data, test_data = data
+    print(len(train_data), len(test_data))
     train_bow, test_bow = None, None
     vocab = pipe.vectorizer.vocabulary_
     if renormalize:
@@ -209,9 +210,10 @@ def get_torch_data(dataset='20NewsGroup', sbert_model=None, max_seq_length=None,
     else:
         # train_corpus, test_corpus = pipe.data.get_partitioned()
         # train_corpus, test_corpus = pipe.tokenize(train_data), pipe.tokenize(test_data)
-        train_bow, train_corpus = pipe.transform(train_data)
-        test_bow, test_corpus = pipe.transform(test_data)
+        train_bow, train_corpus, train_data = pipe.transform(train_data)
+        test_bow, test_corpus, test_data = pipe.transform(test_data)
     text = [doc.split() for doc in train_corpus + test_corpus]
+    print(len(train_data), len(test_data))
 
     idx2token = {v: k for k, v in vocab.items()}
 

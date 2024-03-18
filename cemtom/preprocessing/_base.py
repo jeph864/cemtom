@@ -64,6 +64,7 @@ class Preprocessor:
         self.preprocessed = preprocessed
         self.tokenizer = None
         self.bow = None
+        self.retained_ids = None
 
         if self.use_spacy_tokenizer:
             if self.token_dict is None:
@@ -365,6 +366,7 @@ class Preprocessor:
             labels = None
         vocab = set(self.vocabulary)
         docs_docs, docs_labels, docs_idx = self.filter_docs_with_vocab(vocab, docs=docs, labels=labels)
+        self.retained_ids = docs_idx
         # refit the documents:
         # new_vecctorizer =
         metadata = {"total_documents": len(docs), "vocabulary_length": len(vocab)}
@@ -410,7 +412,7 @@ class Preprocessor:
         else:
             for i, doc in enumerate(docs):
                 new_doc = [w for w in doc.split() if w in vocab]
-                if len(new_doc) > self.min_words:
+                if len(new_doc) >= self.min_words:
                     docs_docs.append(" ".join(new_doc))
                     docs_idx.append(i)
         return docs_docs, docs_labels, docs_idx
@@ -418,7 +420,15 @@ class Preprocessor:
     def transform(self, docs, retokenize=True):
         if self.data is None:
             raise Exception("No data yet registered")
+        retained_ids = None
+        unprocessed_docs = docs
         if retokenize:
             docs = self.tokenize(docs, size=len(docs))
-            docs, _, _ = self.filter_docs_with_vocab(self.vectorizer.vocabulary_, docs)
-        return self.vectorizer.transform(docs).toarray(), docs
+            docs, _, retained_ids = self.filter_docs_with_vocab(self.vectorizer.vocabulary_, docs)
+        if retained_ids is not None and len(retained_ids)>0:
+            unprocessed_docs = self.remove_unretained_documents(unprocessed_docs, retained_ids)
+        return self.vectorizer.transform(docs).toarray(), docs, unprocessed_docs
+
+    @staticmethod
+    def remove_unretained_documents(corpus, retained_ids):
+        return [doc for idx, doc in enumerate(corpus) if idx  in retained_ids]

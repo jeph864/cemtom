@@ -12,6 +12,10 @@ from .distributions import VariationalDistribution
 torch.manual_seed(434)
 
 
+def init_logistic_prior(alpha):
+    pass
+
+
 class InferenceNet(nn.Module):
     def __init__(self, in_features, out_features, hidden_dims=(100, 100), activation='relu', dropout=0.20,
                  batch_norm=True,
@@ -83,12 +87,14 @@ class Decoder(nn.Module):
         nn.init.xavier_uniform_(self.beta)
         self.beta_batchnorm = nn.BatchNorm1d(num_features=output_size, affine=False)
         self.dropout_theta = nn.Dropout(p=dropout)
+        self.topic_word_matrix = None
 
     def forward(self, theta):
         theta = self.dropout_theta(theta)
         # ProdLDA
         recon_x = F.softmax(self.beta_batchnorm(torch.matmul(theta, self.beta)), dim=1)
         topic_word = self.beta
+        self.topic_word_matrix = self.beta
         return recon_x, topic_word
 
 
@@ -134,7 +140,7 @@ class FCDecoder(nn.Module):
     def __init__(self, topic_size, vocab_size, dropout=0.2):
         super().__init__()
 
-        self.beta = nn.Linear(topic_size, vocab_size)
+        self.beta = nn.Linear(topic_size, vocab_size, bias=False)
         self.dropout = nn.Dropout(dropout)
         self.batch_norm = nn.BatchNorm1d(vocab_size)
         self.batch_norm.weight.requires_grad = False
@@ -142,7 +148,7 @@ class FCDecoder(nn.Module):
     def forward(self, theta):
         theta = self.dropout(theta)
         recon_x = self.batch_norm(self.beta(theta))  # F.softmax(, dim=1)
-        return F.softmax(recon_x, dim=1), self.beta.weight.T
+        return F.softmax(recon_x, -1), self.beta.weight.T
 
 
 class BaseVAE(nn.Module):
@@ -182,7 +188,7 @@ class BaseVAE(nn.Module):
 
 class ProdLDA(BaseVAE):
     def __init__(self, vocab_size, topic_size, hidden_dims=(100, 100), dropout=0.2,
-                 prior_mean=0.0, prior_variance=None, learn_priors=True):
+                 prior_mean=0.0, prior_variance=None, alpha=40, learn_priors=True):
         encoder = InferenceNet(vocab_size, topic_size, hidden_dims=hidden_dims, activation='softplus', dropout=dropout)
         decoder = FCDecoder(topic_size, vocab_size, dropout=dropout)
         h2dist = H2LogisticNormal(hidden_dims[-1], topic_size)
@@ -197,7 +203,8 @@ class ProdLDA(BaseVAE):
         if torch.cuda.is_available():
             self.prior_mean = self.prior_mean.cuda()
         if prior_variance is None:
-            prior_variance = 1. - (1. / self.topic_size)
+            prior_variance = (1 / alpha) * (
+                        1 - (2 / self.topic_size) + (1 / (self.topic_size * alpha)))  # 1. - (1. / self.topic_size)
         self.prior_variance = torch.tensor(
             [prior_variance] * topic_size)
         if torch.cuda.is_available():
@@ -211,13 +218,24 @@ class ProdLDA(BaseVAE):
                      posterior=None, **args):
         posterior_variance = posterior.scale
         posterior_mean = posterior.loc
-        posterior_log_variance = torch.log(posterior.scale)
-        latent_loss = 0.5 * (torch.sum(torch.div(posterior_variance, self.prior_variance), 1) +
+        posterior_log_variance = 2 * torch.log(posterior.scale)
+        """latent_loss = 0.5 * (torch.sum(torch.div(posterior_variance, self.prior_variance), 1) +
                              torch.sum(
                                  (self.prior_mean - posterior_mean).pow(2) / self.prior_variance, dim=1)
                              - self.topic_size +
                              torch.sum(torch.log(self.prior_variance)) - torch.sum(posterior_log_variance, dim=1)
-                             )
+                             )"""
+        # var division term
+        var_division = torch.sum(posterior_variance / self.prior_variance, dim=1)
+        # diff means term
+        diff_means = self.prior_mean - posterior_mean
+        diff_term = torch.sum(
+            (diff_means * diff_means) / self.prior_variance, dim=1)
+        # logvar det division term
+        logvar_det_division = \
+            self.prior_variance.log().sum() - posterior_log_variance.sum(dim=1)
+        # combine terms
+        latent_loss = 0.5 * (var_division + diff_term - self.topic_size + logvar_det_division)
 
         # Reconstruction term
         recon_loss = -torch.sum(x * torch.log(recon_x + 1e-10), dim=1)
@@ -225,9 +243,9 @@ class ProdLDA(BaseVAE):
 
 
 class ContextualizedProdLDA(ProdLDA):
-    def __init__(self, vocab_size, topic_size, embedding_size, hidden_dims=(100, 100), dropout=0.2,
+    def __init__(self, vocab_size, topic_size, embedding_size, hidden_dims=(100, 100), dropout=0.2, alpha=60.0,
                  prior_mean=0.0, prior_variance=None, learn_priors=True):
-        super().__init__(vocab_size, topic_size, hidden_dims, dropout, prior_mean, prior_variance, learn_priors)
+        super().__init__(vocab_size, topic_size, hidden_dims, dropout, prior_mean, prior_variance, alpha, learn_priors)
         self.encoder = ContextualizedInferenceNet(self.vocab_size, self.topic_size,
                                                   embedding_size, hidden_dims=self.hidden_dims,
                                                   activation='softplus', dropout=dropout
@@ -279,7 +297,7 @@ class ETM(BaseVAE):
 
 
 class H2Normal(nn.Module):
-    def __init__(self, hidden_dim, latent_dim, batch_norm=False):
+    def __init__(self, hidden_dim, latent_dim, prior_mean=0.0, prior_variance=None, learn_priors=False, batch_norm=False):
         super().__init__()
         self.hidden_dim = hidden_dim
         self.latent_dim = latent_dim
@@ -287,6 +305,19 @@ class H2Normal(nn.Module):
         self.f_mu_batchnorm = nn.BatchNorm1d(self.latent_dim, affine=False)
         self.f_sigma = nn.Linear(self.hidden_dim, self.latent_dim)
         self.f_sigma_batchnorm = nn.BatchNorm1d(self.latent_dim, affine=False)
+        # priors
+        self.prior_mean = torch.tensor(
+            [prior_mean] * latent_dim)
+        if torch.cuda.is_available():
+            self.prior_mean = self.prior_mean.cuda()
+        self.prior_variance = torch.tensor(
+            [prior_variance] * latent_dim)
+        if torch.cuda.is_available():
+            self.prior_variance = self.prior_variance.cuda()
+        self.learn_priors = learn_priors
+        if self.learn_priors:
+            self.prior_mean = nn.Parameter(self.prior_mean)
+            self.prior_variance = nn.Parameter(self.prior_variance)
 
     def reparameterize(self, mu, log_sigma):
         std = torch.exp(0.5 * log_sigma)
@@ -311,12 +342,14 @@ class H2LogisticNormal(H2Normal):
     def reparameterize(self, mu, log_sigma):
         std = torch.exp(0.5 * log_sigma)
         dist = Normal(mu, std)
-        eps = torch.randn(std)
-        if self.training:
 
-            z = dist.rsample()
+        if self.training:
+            eps = torch.randn_like(std)
+            # z = dist.rsample()
+            z = eps.mul(std).add_(mu)
         else:
             z = dist.mean
+            z = mu
         return F.softmax(z, dim=1), dist
 
 
