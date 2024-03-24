@@ -7,7 +7,7 @@ import mlflow
 import numpy as np
 import torch
 
-from .vae import BaseVAE
+from .vae_base import BaseVAE
 
 
 class Trainer:

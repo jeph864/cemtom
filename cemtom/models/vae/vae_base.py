@@ -2,12 +2,8 @@ from collections import OrderedDict
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, TensorDataset
-from torch.distributions import Normal, Dirichlet, LogNormal, LogisticNormal, kl_divergence
-import numpy as np
-import datetime
 
-from .distributions import VariationalDistribution
+from .hidden2dist import H2Dirichlet, H2LogisticNormal, H2Normal, H2LogNormal
 
 torch.manual_seed(434)
 
@@ -59,7 +55,7 @@ class InferenceNet(nn.Module):
         self.hidden_layers = nn.Sequential(OrderedDict(hidden_layers))
         self.dropout = nn.Dropout(p=dropout)
 
-    def forward(self, x, x_bert=None):
+    def forward(self, x, **kwargs):
         hidden = self.hidden_layers(self.activation(self.input(x)))
         hidden = self.dropout(hidden)
         return hidden
@@ -77,6 +73,11 @@ class ContextualizedInferenceNet(InferenceNet):
         x_bert = self.adapt_embeddings(x_bert)
         x = torch.cat((x, x_bert), 1)
         return super().forward(x)
+
+
+class ZeroShotInferenceNet(InferenceNet):
+    def forward(self, x, x_bert=None):
+        return super().forward(x_bert)
 
 
 class Decoder(nn.Module):
@@ -152,13 +153,19 @@ class FCDecoder(nn.Module):
 
 
 class BaseVAE(nn.Module):
-    def __init__(self, encoder=None, decoder=None, h2dist=None):
+    def __init__(self, encoder=None, decoder=None, h2dist=None,
+                 learn_priors=False):
         super().__init__()
         self.encoder = encoder
         self.decoder = decoder
         self.h2dist = h2dist
+
+        self.learn_priors = learn_priors
         self.document_topic_matrix = None
         self.topic_word_matrix = None
+        self.topic_size = self.encoder.topic_size
+        self.vocab_size = self.encoder.vocab_size
+        self.hidden_dims = self.encoder.hidden_dims
 
     def forward(self, x, x_bert=None):
         hidden = self.encoder(x, x_bert)
@@ -191,52 +198,18 @@ class ProdLDA(BaseVAE):
                  prior_mean=0.0, prior_variance=None, alpha=40, learn_priors=True):
         encoder = InferenceNet(vocab_size, topic_size, hidden_dims=hidden_dims, activation='softplus', dropout=dropout)
         decoder = FCDecoder(topic_size, vocab_size, dropout=dropout)
-        h2dist = H2LogisticNormal(hidden_dims[-1], topic_size)
+        prior_variance = (1 / alpha) * (
+                1 - (2 / topic_size) + (1 / (topic_size * alpha)))
+        # h2dist = H2LogisticNormal(hidden_dims[-1], topic_size, prior_variance=prior_variance)
+        h2dist = H2Dirichlet(hidden_dims[-1], topic_size, learn_priors=True, samples="rsvi")
         super().__init__(encoder, decoder, h2dist)
         self.vocab_size = vocab_size
         self.topic_size = topic_size
         self.hidden_dims = hidden_dims
 
-        # Move Later ???
-        self.prior_mean = torch.tensor(
-            [prior_mean] * topic_size)
-        if torch.cuda.is_available():
-            self.prior_mean = self.prior_mean.cuda()
-        if prior_variance is None:
-            prior_variance = (1 / alpha) * (
-                        1 - (2 / self.topic_size) + (1 / (self.topic_size * alpha)))  # 1. - (1. / self.topic_size)
-        self.prior_variance = torch.tensor(
-            [prior_variance] * topic_size)
-        if torch.cuda.is_available():
-            self.prior_variance = self.prior_variance.cuda()
-        self.learn_priors = learn_priors
-        if self.learn_priors:
-            self.prior_mean = nn.Parameter(self.prior_mean)
-            self.prior_variance = nn.Parameter(self.prior_variance)
-
     def compute_loss(self, x=None, recon_x=None,
                      posterior=None, **args):
-        posterior_variance = posterior.scale
-        posterior_mean = posterior.loc
-        posterior_log_variance = 2 * torch.log(posterior.scale)
-        """latent_loss = 0.5 * (torch.sum(torch.div(posterior_variance, self.prior_variance), 1) +
-                             torch.sum(
-                                 (self.prior_mean - posterior_mean).pow(2) / self.prior_variance, dim=1)
-                             - self.topic_size +
-                             torch.sum(torch.log(self.prior_variance)) - torch.sum(posterior_log_variance, dim=1)
-                             )"""
-        # var division term
-        var_division = torch.sum(posterior_variance / self.prior_variance, dim=1)
-        # diff means term
-        diff_means = self.prior_mean - posterior_mean
-        diff_term = torch.sum(
-            (diff_means * diff_means) / self.prior_variance, dim=1)
-        # logvar det division term
-        logvar_det_division = \
-            self.prior_variance.log().sum() - posterior_log_variance.sum(dim=1)
-        # combine terms
-        latent_loss = 0.5 * (var_division + diff_term - self.topic_size + logvar_det_division)
-
+        latent_loss = self.h2dist.kl_divergence_analytic(posterior)
         # Reconstruction term
         recon_loss = -torch.sum(x * torch.log(recon_x + 1e-10), dim=1)
         return latent_loss, recon_loss
@@ -265,7 +238,7 @@ class ETM(BaseVAE):
                                )
         decoder = ContextualizedDecoder(topic_size, vocab_size, embedding_size, embeddings,
                                         train_embeddings=train_embeddings, p_dropout=p_dropout)
-        h2dist = H2LogisticNormal(hidden_dims[-1], topic_size)
+        h2dist = H2LogisticNormal(hidden_dims[-1], topic_size, prior_mean=0.0, prior_variance=1.0)
         super().__init__(encoder, decoder, h2dist)
         self.vocab_size = vocab_size
         self.topic_size = topic_size
@@ -279,97 +252,10 @@ class ETM(BaseVAE):
 
     def compute_loss(self, x=None, recon_x=None,
                      posterior=None):
-        posterior_variance = posterior.scale
-        posterior_mean = posterior.loc
-        posterior_log_variance = torch.log(posterior.scale)
-        prior_loc = torch.zeros_like(posterior.loc)
-        prior_scale = torch.ones_like(posterior.scale)
-        latent_loss = 0.5 * (torch.sum(torch.div(posterior_variance, prior_scale), 1) +
-                             torch.sum(
-                                 (prior_loc - posterior_mean).pow(2) / prior_scale, dim=1)
-                             - self.topic_size +
-                             torch.sum(torch.log(prior_scale)) - torch.sum(posterior_log_variance, dim=1)
-                             )
+        latent_loss = self.h2dist.kl_divergence_analytic(posterior)
         # Reconstruction term
         recon_loss = -torch.sum(x * torch.log(recon_x + 1e-10), dim=1)
 
         return latent_loss, recon_loss
 
 
-class H2Normal(nn.Module):
-    def __init__(self, hidden_dim, latent_dim, prior_mean=0.0, prior_variance=None, learn_priors=False, batch_norm=False):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.latent_dim = latent_dim
-        self.f_mu = nn.Linear(self.hidden_dim, self.latent_dim)
-        self.f_mu_batchnorm = nn.BatchNorm1d(self.latent_dim, affine=False)
-        self.f_sigma = nn.Linear(self.hidden_dim, self.latent_dim)
-        self.f_sigma_batchnorm = nn.BatchNorm1d(self.latent_dim, affine=False)
-        # priors
-        self.prior_mean = torch.tensor(
-            [prior_mean] * latent_dim)
-        if torch.cuda.is_available():
-            self.prior_mean = self.prior_mean.cuda()
-        self.prior_variance = torch.tensor(
-            [prior_variance] * latent_dim)
-        if torch.cuda.is_available():
-            self.prior_variance = self.prior_variance.cuda()
-        self.learn_priors = learn_priors
-        if self.learn_priors:
-            self.prior_mean = nn.Parameter(self.prior_mean)
-            self.prior_variance = nn.Parameter(self.prior_variance)
-
-    def reparameterize(self, mu, log_sigma):
-        std = torch.exp(0.5 * log_sigma)
-        dist = Normal(mu, std)
-        if self.training:
-            z = dist.rsample()
-        else:
-            z = dist.mean
-        return z, dist
-
-    def forward(self, hidden):
-        mu = self.f_mu_batchnorm(self.f_mu(hidden))
-        log_sigma = self.f_sigma_batchnorm(self.f_sigma(hidden))
-        return self.reparameterize(mu, log_sigma)
-
-
-class H2LogNormal(nn.Module):
-    pass
-
-
-class H2LogisticNormal(H2Normal):
-    def reparameterize(self, mu, log_sigma):
-        std = torch.exp(0.5 * log_sigma)
-        dist = Normal(mu, std)
-
-        if self.training:
-            eps = torch.randn_like(std)
-            # z = dist.rsample()
-            z = eps.mul(std).add_(mu)
-        else:
-            z = dist.mean
-            z = mu
-        return F.softmax(z, dim=1), dist
-
-
-class H2Dirichlet(nn.Module):
-    def __init__(self, hidden_dim, latent_dim):
-        super().__init__()
-        self.hidden_dim = hidden_dim
-        self.latent_dim = latent_dim
-        self.fc = nn.Linear(self.hidden_dim, self.latent_dim)
-        self.bn = nn.BatchNorm1d(self.latent_dim)
-
-    def forward(self, hidden):
-        alphas = self.bn(self.fc(hidden))
-        dist = Dirichlet(alphas)
-        if self.training:
-            z = dist.rsample()
-        else:
-            z = dist.mean
-        return z, dist
-
-    @staticmethod
-    def kl(posterior, prior):
-        return torch.distributions.kl_divergence(posterior, prior).mean()

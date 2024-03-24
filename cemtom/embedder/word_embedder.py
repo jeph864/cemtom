@@ -3,6 +3,9 @@ import pdb
 import fasttext.util
 import fasttext
 
+from gensim.models import KeyedVectors
+from gensim.models import Word2Vec as GensimWord2Vec
+
 import os
 import time, sys
 
@@ -375,11 +378,54 @@ class FasttextEmbedder(BaseWordEmbedder):
         return np.array(word_embeddings)
 
 
+class Word2VecEmbedder(BaseWordEmbedder):
+    def __init__(self, path=None):
+        super().__init__()
+        if path is not None:
+            self.model = KeyedVectors.load_word2vec_format(path, binary=True)
+        else:
+            raise ValueError("Path to the Word2Vec model must be provided")
+
+    def embed(self, words):
+        word_embeddings = []
+        for word in words:
+            if word in self.model:
+                word_embeddings.append(self.model[word])
+            else:
+                # Handle out-of-vocabulary words, here simply adding zeros
+                word_embeddings.append(np.zeros(self.model.vector_size))
+        return np.array(word_embeddings)
+
+
+class GloVeEmbedder(BaseWordEmbedder):
+    def __init__(self, path=None):
+        super().__init__()
+        if path is not None:
+            # Assuming that the GloVe model is in Word2Vec format
+            self.model = KeyedVectors.load_word2vec_format(path, binary=True)
+        else:
+            raise ValueError("Path to the GloVe model must be provided")
+
+    def embed(self, words):
+        word_embeddings = []
+        for word in words:
+            if word in self.model:
+                word_embeddings.append(self.model[word])
+            else:
+                # Handle out-of-vocabulary words, here simply adding zeros
+                word_embeddings.append(np.zeros(self.model.vector_size))
+        return np.array(word_embeddings)
+
+
 def get_word_embedding_model(name=None, model=None, path=None):
     if name == "fasttext":
         return FasttextEmbedder(embedding_model=model, path=path)
     elif name == "bert":
         return BertVocabEmbedder.load_embeddings(path)
+    elif name == "word2vec":
+        return Word2VecEmbedder(path=path)
+    elif name == "glove":
+        return GloVeEmbedder(path=path)
     else:
         return BaseWordEmbedder()
 
@@ -398,5 +444,4 @@ def get_embeddings(name='bert', path=None, vocabulary=None, dataset=None):
         vocabulary = embedding_model.vocab
     else:
         raise NotImplementedError("Embedding Model mot implemented! ")
-    return embeddings,  vocabulary, embedding_model.word2idx, embedding_model
-
+    return embeddings, vocabulary, embedding_model.word2idx, embedding_model
